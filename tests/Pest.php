@@ -1,8 +1,16 @@
 <?php
 
+use App\Actions\Ledger\PostEntry;
+use App\Models\JournalEntry;
+use App\Models\Period;
+use App\Models\User;
 use App\Support\Currency;
+use App\Support\Ledger\PendingLine;
 use App\Support\Money;
+use Carbon\CarbonInterface;
+use Illuminate\Database\Eloquent\Model;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Collection;
 use Tests\TestCase;
 
 /*
@@ -110,4 +118,53 @@ expect()->extend('toBalance', function () {
 function money(int $major, ?string $currency = null): Money
 {
     return Money::fromMajor($major, $currency === null ? Currency::functional() : Currency::of($currency));
+}
+
+/**
+ * Post an entry the way the application does.
+ *
+ * Tests never build journal_lines directly — the plan is explicit that the
+ * action is the only write path, and a fixture that inserts rows behind it
+ * would be testing a ledger the application cannot produce. This is the
+ * sanctioned shortcut: it is still PostEntry, just with the arguments a test
+ * usually wants defaulted.
+ *
+ * @param  list<PendingLine>  $lines
+ */
+function postEntry(
+    array $lines,
+    CarbonInterface|string $entryDate = '2026-01-15',
+    ?string $memo = null,
+    ?User $user = null,
+    ?Model $source = null,
+): JournalEntry {
+    return app(PostEntry::class)->handle(
+        entryDate: $entryDate,
+        lines: $lines,
+        memo: $memo,
+        user: $user,
+        source: $source,
+    );
+}
+
+/**
+ * Twelve contiguous calendar-month periods, which is what most ledger tests
+ * need before they can post anything at all.
+ *
+ * @return Collection<int, Period>
+ */
+function fiscalYear(int $year = 2026): Collection
+{
+    return collect(range(1, 12))->map(
+        fn (int $month): Period => Period::factory()->month($year, $month)->create()
+    );
+}
+
+/**
+ * A single open period covering a whole year, for tests that care about
+ * entries rather than month boundaries.
+ */
+function fiscalYearAsOnePeriod(int $year = 2026): Period
+{
+    return Period::factory()->year($year)->create();
 }

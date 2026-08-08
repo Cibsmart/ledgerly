@@ -2,6 +2,7 @@
 
 namespace Database\Factories;
 
+use App\Enums\Role;
 use App\Models\User;
 use Illuminate\Database\Eloquent\Factories\Factory;
 use Illuminate\Support\Facades\Hash;
@@ -27,6 +28,10 @@ class UserFactory extends Factory
         return [
             'name' => fake()->name(),
             'email' => fake()->unique()->safeEmail(),
+            // Matches the column default. A test that posts must say so by
+            // asking for a role that can, which keeps the access-control tests
+            // honest — a permissive default would make them pass by accident.
+            'role' => Role::Viewer,
             'email_verified_at' => now(),
             'password' => static::$password ??= Hash::make('password'),
             'remember_token' => Str::random(10),
@@ -34,6 +39,26 @@ class UserFactory extends Factory
             'two_factor_recovery_codes' => null,
             'two_factor_confirmed_at' => null,
         ];
+    }
+
+    public function role(Role $role): static
+    {
+        return $this->state(['role' => $role]);
+    }
+
+    public function admin(): static
+    {
+        return $this->role(Role::Admin);
+    }
+
+    public function bookkeeper(): static
+    {
+        return $this->role(Role::Bookkeeper);
+    }
+
+    public function viewer(): static
+    {
+        return $this->role(Role::Viewer);
     }
 
     /**

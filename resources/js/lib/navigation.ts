@@ -12,6 +12,7 @@ import {
     WalletCards,
 } from 'lucide-react';
 import { dashboard } from '@/routes';
+import { index as accounts } from '@/routes/accounts';
 import type { NavItem, NavSection } from '@/types';
 
 /**
@@ -29,7 +30,7 @@ export const navSections: NavSection[] = [
         title: 'Ledger',
         items: [
             { title: 'Dashboard', href: dashboard(), icon: LayoutGrid },
-            { title: 'Chart of Accounts', icon: ListTree },
+            { title: 'Chart of Accounts', href: accounts(), icon: ListTree },
             { title: 'Journal Entries', icon: BookOpenText },
             { title: 'Periods', icon: CalendarRange },
         ],

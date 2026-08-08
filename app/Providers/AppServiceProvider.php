@@ -2,12 +2,19 @@
 
 namespace App\Providers;
 
+use App\Enums\Permission;
+use App\Models\Account;
+use App\Models\ExchangeRate;
+use App\Models\JournalEntry;
+use App\Models\JournalLine;
+use App\Models\Period;
 use App\Models\User;
 use Carbon\CarbonImmutable;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\Relation;
 use Illuminate\Support\Facades\Date;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Gate;
 use Illuminate\Support\ServiceProvider;
 use Illuminate\Validation\Rules\Password;
 
@@ -27,6 +34,26 @@ class AppServiceProvider extends ServiceProvider
     public function boot(): void
     {
         $this->configureDefaults();
+        $this->configureAuthorization();
+    }
+
+    /**
+     * Map every Permission case onto a Gate ability.
+     *
+     * Roles are an enum rather than spatie/laravel-permission rows, but the
+     * check still goes through the Gate so that `$user->can(Permission::PostEntries)`,
+     * the `can:` middleware and `@can` in a view all work the ordinary way.
+     * Model-specific rules — "this period is already closed" — belong in the
+     * policies, which layer on top of these.
+     */
+    protected function configureAuthorization(): void
+    {
+        foreach (Permission::cases() as $permission) {
+            Gate::define(
+                $permission->value,
+                fn (User $user): bool => $user->hasPermission($permission)
+            );
+        }
     }
 
     /**
@@ -59,6 +86,11 @@ class AppServiceProvider extends ServiceProvider
         // adding an alias after rows exist means rewriting stored type strings.
         Relation::enforceMorphMap([
             'user' => User::class,
+            'account' => Account::class,
+            'period' => Period::class,
+            'journal_entry' => JournalEntry::class,
+            'journal_line' => JournalLine::class,
+            'exchange_rate' => ExchangeRate::class,
         ]);
     }
 }

@@ -3,6 +3,8 @@
 namespace App\Models;
 
 // use Illuminate\Contracts\Auth\MustVerifyEmail;
+use App\Enums\Permission;
+use App\Enums\Role;
 use Database\Factories\UserFactory;
 use Illuminate\Database\Eloquent\Attributes\Fillable;
 use Illuminate\Database\Eloquent\Attributes\Hidden;
@@ -18,6 +20,7 @@ use Laravel\Fortify\TwoFactorAuthenticatable;
  * @property int $id
  * @property string $name
  * @property string $email
+ * @property Role $role
  * @property Carbon|null $email_verified_at
  * @property string $password
  * @property string|null $two_factor_secret
@@ -45,6 +48,24 @@ class User extends Authenticatable implements PasskeyUser
             'email_verified_at' => 'datetime',
             'password' => 'hashed',
             'two_factor_confirmed_at' => 'datetime',
+            'role' => Role::class,
         ];
+    }
+
+    /**
+     * Whether this user's role grants a permission.
+     *
+     * Policies and the Gate definitions in AppServiceProvider call this rather
+     * than comparing roles directly, so adding a fourth role later is one edit
+     * to Role::permissions() instead of a grep across the app.
+     */
+    public function hasPermission(Permission $permission): bool
+    {
+        return $this->role->grants($permission);
+    }
+
+    public function isAdmin(): bool
+    {
+        return $this->role === Role::Admin;
     }
 }
