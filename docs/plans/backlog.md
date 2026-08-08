@@ -7,7 +7,7 @@ Plan documents referenced below:
 - `ledgerly-development-plan.md` — the roadmap: architecture principles, core data model, and phases 0–11.
 - `chart-of-accounts.md` — the default chart the Phase 1 seeder loads, with `is_monetary` and `cash_flow_classification` on every account, plus three open questions that need answering before that seeder is written.
 
-Status verified against the codebase on 2026-08-08. **Plan re-scoped against the real business requirements on 2026-07-28 — phase order changed; see below.**
+Status verified against the codebase on 2026-08-08. **Phases 0 and 1 are complete; Phase 2 is next — see § 4.** Plan re-scoped against the real business requirements on 2026-07-28 — phase order changed; see below.
 
 ---
 
@@ -70,27 +70,66 @@ Plan: `ledgerly-development-plan.md` § Phase 0.
 - **Base layout.** Sidebar grouped into Ledger / Records / Reports; navigation defined once in `resources/js/lib/navigation.ts` and consumed by both the sidebar and the header layout. Screens that do not exist yet are listed as inert placeholders — giving an item an `href` is what shipping it looks like. Starter-kit repo/docs links removed.
 - **Default chart of accounts drafted** — `chart-of-accounts.md`.
 
-**Three questions from the chart need answering before the Phase 1 seeder is written**, though none blocks starting Phase 1:
-
-1. **R2 says eight account-currency pairs but enumerates seven** (Zenith ×2, Grey ×2, Deel, Moniepoint, Kuda). Code 1018 is left unassigned rather than inventing an account.
-2. **Header accounts have no `is_postable` column.** Recommendation: derive it — an account with children cannot be posted to — and enforce in `PostEntry`, rather than adding a column that can drift out of step with the tree.
-3. **D5a input-VAT recoverability** still needs the accountant; the chart supports either answer via `1310 Input VAT — Recoverable` and `6210 Input VAT — Expensed`.
+**Three questions were raised here for the Phase 1 seeder. Two are now answered — see § 3.** In short: R2's count was off by one, so the seeder ships seven cash accounts and leaves 1018 free; and postability is derived from having children rather than stored in an `is_postable` column. **D5a (input-VAT recoverability) remains open** and still needs the accountant.
 
 **Also fixed:** the local `.env` had `DB_CONNECTION=ledgerly` with MySQL's port and user, so `php artisan` could not boot at all. Restored to the documented PostgreSQL settings; the previous file is at `.env.backup-20260808`.
 
-## 3. Phase 1 — Chart of accounts & ledger core
+## 3. Phase 1 — Chart of accounts & ledger core — ✅ Completed 2026-08-08
 
-Plan: `ledgerly-development-plan.md` § Phase 1, and `chart-of-accounts.md` for the seeder content. **Unblocked — ready to start, and the next thing to build.** When built:
+Plan: `ledgerly-development-plan.md` § Phase 1; `chart-of-accounts.md` for the seeder content. 240 tests green on **both** sqlite and PostgreSQL, PHPStan level 7 clean.
 
-- Add the `journal_entry`, `journal_line`, `account`, and `period` aliases to `Relation::enforceMorphMap()` **before** any rows exist.
-- Give `JournalLine` its `booted()` immutability guards in the same commit as the model.
-- Ship the `exchange_rates` table and the deferred `SUM(functional_amount_minor) = 0` constraint together with `journal_lines` — the constraint is the payoff for D1 and is not a later addition.
-- `PostEntry` takes an **optional explicit rate per line** (D8), falling back to `exchange_rates`.
-- Seed the full chart from the plan's `accounts` section — not just `7100 FX Gain` / `8100 FX Loss`, but AR/AP controls, WHT and VAT accounts, PAYE and pension payables, Due-to-Partner, and one asset account per financial account. Populate `is_monetary` and `cash_flow_classification` on **every** account; `is_monetary` is now load-bearing, since D7 promotes revaluation into Phase 5.
+- **Migrations.** `accounts`, `periods`, `exchange_rates`, `journal_entry_sequences`, `journal_entries`, `journal_lines`, plus `role` on `users`. Morph map aliases and the `booted()` immutability guards shipped with the models; indexes (including a partial index on posted entries) shipped with the tables.
+- **The deferred balance guarantee is a `CONSTRAINT TRIGGER`, not a `CHECK`.** A CHECK is per row and cannot aggregate across an entry's lines, so `DEFERRABLE INITIALLY DEFERRED` on a trigger function is the only form PostgreSQL offers. Alongside it: `amount_minor <> 0`, `exchange_rate > 0`, and **a sign-agreement check** — a translation that flips a line's sign still balances if its counterpart is flipped too, so the imbalance check alone would never catch it.
+- **CHECK constraints are PostgreSQL-only.** SQLite accepts CHECK at `CREATE TABLE` time but has no `ALTER TABLE ADD CONSTRAINT`, and Blueprint exposes no API for the former. The action layer is therefore the guarantee on both engines and the database is the backstop on the one that runs production. `DatabaseConstraintsTest` is pinned to pgsql and writes rows *directly*, bypassing `PostEntry` — routing through the action would prove nothing about the database.
+- **`RefreshDatabase` hides deferred constraints.** It wraps each test in a transaction it rolls back, so nothing ever commits and the trigger never fires: a test written the obvious way passes whether the constraint exists or not. `SET CONSTRAINTS ALL IMMEDIATE` forces evaluation. Anyone adding a deferred-constraint test needs this or it is worthless.
+- **Entry numbering is a counter row under a row lock, not a sequence.** A PostgreSQL sequence is race-safe but non-transactional, so a rolled-back posting would burn its number and leave a permanent gap in the numbering — the kind of hole an auditor asks about. `MAX + 1` is never used.
+- **`PostEntry` / `ReverseEntry` / `ClosePeriod` / `ReopenPeriod` / `CreatePeriod`.** Per-line explicit rate with `exchange_rates` fallback (D8); period resolved from `entry_date` under a row lock that `ClosePeriod` also takes, so close-versus-post cannot interleave. **`ReverseEntry` reuses each original line's snapshotted rate** — re-resolving today's rate would leave a residual indistinguishable from a real FX movement.
+- **Roles are an enum plus four policies.** `spatie/laravel-permission` still not needed. Permissions are Gate abilities so `$user->can(...)` works normally. The load-bearing split: Bookkeeper closes periods, only Admin reopens one.
+- **Default chart seeded — 70 accounts**, `is_monetary` and `cash_flow_classification` populated on every one, idempotent on `code`.
+- **Golden fixture** — `GoldenFixtureSeeder`, 50 entries across January and February 2026, asserted against hand-derived figures in `tests/Fixtures/GoldenFixtureExpectations.php`. Covers the Grey USD→NGN conversion with its FX residual (D9) and the UpSub settlement booking gross revenue against the payable released at its *booked* rate (R8). Deel's ₦12,780,000 balance cannot be reconstructed from its $7,850 and any single rate — that is the property the fixture exists to pin.
+- **Chart of Accounts screen** — code-ordered, nested, create/edit/archive/restore, no delete route at all.
 
-## 4. Phases 2–3 — Books live, then statements (MVP milestone)
+### Two open questions from § 2 answered
 
-Plan: `ledgerly-development-plan.md` §§ Phase 2, Phase 3. Every statement test asserts `expect($lines)->toBalance()`. Phase 2 must ship `ConvertCurrency` (D9) and transfers (D10) — the two highest-volume entry types in this business. From the end of Phase 2 the manual entry form can express everything in R1–R8 by hand, so no live obligation (the Jul–Dec 2026 UpSub schedule, monthly payroll) waits on a later module.
+1. **R2's eighth account-currency pair: there isn't one.** The seeder ships seven (1011–1017) and leaves **1018 free**. R2's count was off by one; adding an eighth institution later is a data insert, not a migration.
+2. **Header accounts derive their postability from having children.** No `is_postable` column, enforced in `PostEntry`. A column would be a second source of truth that can drift out of step with the tree.
+
+**D5a (input-VAT recoverability) is still open** and still needs the accountant. It blocks nothing before Phase 6; the chart ships both `1310 Input VAT — Recoverable` and `6210 Input VAT — Expensed`.
+
+### Known gaps, deliberately left
+
+- **No screen for periods or exchange rates.** The actions exist and are tested, but the fiscal calendar comes from `FiscalCalendarSeeder` and rates have no UI at all. Rates are needed the moment anyone records a USD transaction by hand, so this is Phase 2 work, not a nicety.
+- **No way to change a user's role.** Registration defaults to `Viewer` (least privilege) and the migration promoted existing users to `Admin`, but there is no screen and no command to promote anyone else. A second team member cannot currently be given posting rights.
+- **`JournalLine` refuses *all* updates.** Correct today. Phase 4's `cleared_at` / `reconciliation_id` are metadata about a line rather than the line itself, so that guard will need an explicit allowlist of those two columns — widening it to "anything not an amount" would let a `memo` or an `account_id` through with it.
+- **`contact_id` and `tax_rate_id` are not on `journal_lines` yet**, and arrive with the `contacts` and `tax_rates` tables in Phases 2 and 6. A nullable column with no table to point at buys nothing.
+- **The "property-based" test is randomised-input, not property-based.** It posts 25 balanced entries at random dates and asserts the ledger nets to zero. No generator library is installed and adding one needs approval.
+- **The Chart of Accounts page is not verified to mount client-side.** It renders over real HTTP with correct props and passes `tsc`/ESLint, but confirming the React tree actually mounts needs Playwright and `pest-plugin-browser`, neither of which is installed.
+
+### Also fixed
+
+- **The local `.env` had drifted back to MySQL again** (`DB_CONNECTION=mysql`, port 3306, user root) despite the 2026-07-28 fix recorded in § 2. Restored to the documented PostgreSQL settings; previous file at `.env.backup-mysql-20260808`. Worth finding out what keeps reverting it — MySQL 8 has neither deferred constraints nor constraint triggers, so the entire D1 payoff silently disappears on it.
+- **`CREATE FUNCTION` had to become `CREATE OR REPLACE FUNCTION`.** A function is not owned by any table, so dropping `journal_lines` takes its trigger but leaves the function behind, and a plain `CREATE` fails on every `migrate:fresh` after the first.
+
+## 4. Phase 2 — Books live — **next to build**
+
+Plan: `ledgerly-development-plan.md` § Phase 2. **Unblocked.** Start with **opening balances**, posting through `PostEntry` against `3200 Opening Balance Equity` — it is the first thing needed after seeding the chart, and every other Phase 2 screen is entering transactions on top of balances that have to be right first.
+
+Sequence, and why:
+
+1. **Opening balances**, per above. `3200` should return to zero once they are complete; a non-zero balance is the live "you are not finished" signal, which is why it is a real account rather than netted into Retained Earnings.
+2. **Exchange rate management** — pulled forward from nowhere in particular, because it is a Phase 1 gap: nobody can record a USD transaction by hand until rates can be entered. Small screen, `ManageExchangeRates` permission already exists.
+3. **`financial_accounts` CRUD** and their GL mapping (R2) — the seven cash accounts already exist in the chart and need their real-world counterparts.
+4. **Transfers (D10) and `ConvertCurrency` (D9)** — the two highest-volume entry types in this business. The FX conversion is the sharpest test case in the suite, and the golden fixture already contains a hand-verified example of it to check the action against.
+5. **Manual journal entry form**, plus the simplified "record an expense" / "record income" forms.
+6. **Contacts** with tax defaults (D5), **attachments** (R7), **transaction list** with Scout search, **recurring transactions generating drafts only**.
+
+Also needed somewhere in here, and currently missing entirely: **a way to change a user's role**. Registration defaults to Viewer, so a second team member cannot be given posting rights at all today.
+
+**Deliverable:** every one of R1–R8 is *recordable*, by hand where no module exists yet. The live Jul–Dec 2026 UpSub schedule and the monthly payroll become enterable from this point, well before their dedicated modules exist.
+
+## 4b. Phase 3 — Core statements (MVP milestone)
+
+Plan: `ledgerly-development-plan.md` § Phase 3. Every statement test asserts `expect($lines)->toBalance()` **and** asserts against the Phase 1 golden fixture — `GoldenFixtureExpectations::statementTotals()` already carries the hand-derived revenue, expense, net profit, asset, liability and equity figures for exactly this purpose.
 
 ## 5. Phases 4–11 — Post-MVP, now in scope
 

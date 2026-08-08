@@ -19,13 +19,15 @@ Read this before Phase 0 — the scaffold is further along than a bare Laravel i
 
 **Already built (Phase 0, 2026-08-08):** PostgreSQL in CI plus a full second suite run against it, `spatie/laravel-activitylog` behind `App\Actions\Audit\RecordAudit`, the grouped sidebar shell, and the default chart of accounts drafted in `chart-of-accounts.md`.
 
+**Already built (Phase 1, 2026-08-08):** the whole ledger core — migrations with the deferred balance trigger, `PostEntry` / `ReverseEntry` / `ClosePeriod` / `ReopenPeriod` / `CreatePeriod`, the Role/Permission enums and four policies, the seeded 70-account chart, the 50-entry golden fixture with hand-verified figures, and the Chart of Accounts screen. 240 tests green on both engines. **Read `backlog.md` § 3 for the known gaps** — notably that there is still no screen for periods, exchange rates, or user roles.
+
 **Already built (Foundation hardening, 2026-07-27):** `App\Support\Money` (currency-aware, throws on cross-currency arithmetic), `App\Support\Currency`, `MoneyCast`, `config/money.php`, `Model::preventLazyLoading` + `Relation::enforceMorphMap` in `AppServiceProvider`, the audit-completeness architecture test, and the `expect()->toBalance()` custom expectation.
 
 **Not installed, and not to be installed without approval:** `spatie/laravel-permission`, `mpdf/mpdf`, `openspout/openspout`, `recharts`.
 
 **Do not install Breeze.** Fortify is already in place and the starter kit's auth pages are built against it.
 
-**Database state:** only the starter-kit tables exist (`users`, `cache`, `jobs`, `passkeys`, 2FA columns). No accounting tables yet.
+**Database state:** the ledger exists. `accounts`, `periods`, `exchange_rates`, `journal_entries`, `journal_lines` and `journal_entry_sequences` are migrated, with the deferred balance trigger and the CHECK constraints on PostgreSQL. `php artisan migrate:fresh --seed` gives you 70 seeded accounts and 24 monthly periods; `GoldenFixtureSeeder` adds the 50-entry fixture company on top.
 
 ---
 
@@ -247,17 +249,17 @@ Column lists are the *minimum*.
 
 **Deliverable:** ✅ CI green against PostgreSQL, a shell layout to hang Phase 1 screens on.
 
-### Phase 1 — Ledger Core & Chart of Accounts (2–2.5 weeks)
+### Phase 1 — Ledger Core & Chart of Accounts (2–2.5 weeks) — ✅ Complete 2026-08-08
 
-- [ ] Migrations: `accounts`, `journal_entries`, `journal_lines`, `periods`, `exchange_rates` — with the `CHECK` constraints and the deferred `SUM(functional_amount_minor) = 0` constraint **in the same migration as `journal_lines`**
-- [ ] Morph map aliases registered **before any rows exist**; `booted()` immutability guards shipped in the same commit as the models
-- [ ] **Indexes here, not in a hardening phase:** `journal_lines(account_id)`, `journal_lines(journal_entry_id)`, `journal_entries(entry_date)`, `journal_entries(period_id)`, partial index on posted entries
-- [ ] `PostEntry` / `ReverseEntry` — balance validation, period assignment from `entry_date`, closed-period rejection, attribution, race-safe `entry_number`, **per-line rate override with `exchange_rates` fallback (D8)**
-- [ ] Period locking and role/policy scaffolding — both here, because retrofitting gates across every controller is how a Viewer ends up able to post
-- [ ] Chart of Accounts UI: list, create, edit, archive, nesting, code-ordered
-- [ ] Seed the default chart, with `is_monetary` and `cash_flow_classification` populated on **every** account
-- [ ] **Golden fixture company** — ~50 entries across two fiscal periods with hand-verified trial balance, income statement and balance sheet committed alongside. Every later phase asserts against it. Highest-leverage artifact in the plan
-- [ ] Tests: unbalanced rejected; posted immutable; reversal correct and single-use; closed periods reject; property-based — any random set of balanced entries nets to zero
+- [x] Migrations: `accounts`, `journal_entries`, `journal_lines`, `periods`, `exchange_rates` — with the `CHECK` constraints and the deferred `SUM(functional_amount_minor) = 0` constraint **in the same migration as `journal_lines`**
+- [x] Morph map aliases registered **before any rows exist**; `booted()` immutability guards shipped in the same commit as the models
+- [x] **Indexes here, not in a hardening phase:** `journal_lines(account_id)`, `journal_lines(journal_entry_id)`, `journal_entries(entry_date)`, `journal_entries(period_id)`, partial index on posted entries
+- [x] `PostEntry` / `ReverseEntry` — balance validation, period assignment from `entry_date`, closed-period rejection, attribution, race-safe `entry_number`, **per-line rate override with `exchange_rates` fallback (D8)**
+- [x] Period locking and role/policy scaffolding — both here, because retrofitting gates across every controller is how a Viewer ends up able to post
+- [x] Chart of Accounts UI: list, create, edit, archive, nesting, code-ordered
+- [x] Seed the default chart, with `is_monetary` and `cash_flow_classification` populated on **every** account
+- [x] **Golden fixture company** — ~50 entries across two fiscal periods with hand-verified trial balance, income statement and balance sheet committed alongside. Every later phase asserts against it. Highest-leverage artifact in the plan
+- [x] Tests: unbalanced rejected; posted immutable; reversal correct and single-use; closed periods reject; ~~property-based~~ **randomised-input** — 25 balanced entries at random dates net to zero. Genuinely property-based testing needs a generator library, which is not installed and would need approval
 
 ### Phase 2 — Books Live (2–2.5 weeks)
 
