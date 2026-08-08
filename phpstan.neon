@@ -11,3 +11,17 @@ parameters:
         - routes/
 
     level: 7
+
+    # Resolve cast targets by parsing the casts() method body. Without this,
+    # Larastan reads the method's declared return type (array<string, string>)
+    # and every enum and value-object cast — including Money — degrades to a
+    # plain string, producing a large number of false positives.
+    parseModelCastsMethod: true
+
+    # Lets Larastan infer model property types from the migration column
+    # definitions rather than falling back to mixed.
+    databaseMigrationsPath:
+        - database/migrations
+
+    # There is deliberately no baseline. The suite passes clean at level 7;
+    # keep it that way rather than suppressing new findings.

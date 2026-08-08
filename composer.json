@@ -17,7 +17,8 @@
         "laravel/nightwatch": "^1.28",
         "laravel/scout": "^11.4",
         "laravel/tinker": "^3.0",
-        "laravel/wayfinder": "^0.1.14"
+        "laravel/wayfinder": "^0.1.14",
+        "spatie/laravel-activitylog": "*"
     },
     "require-dev": {
         "fakerphp/faker": "^1.24",
@@ -46,12 +47,16 @@
     },
     "scripts": {
         "setup": [
+            "@hooks",
             "composer install",
             "@php -r \"file_exists('.env') || copy('.env.example', '.env');\"",
             "@php artisan key:generate",
             "@php artisan migrate --force",
             "npm install",
             "npm run build"
+        ],
+        "hooks": [
+            "git config core.hooksPath .githooks || true"
         ],
         "dev": [
             "Composer\\Config::disableProcessTimeout",

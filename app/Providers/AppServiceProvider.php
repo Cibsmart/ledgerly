@@ -2,7 +2,10 @@
 
 namespace App\Providers;
 
+use App\Models\User;
 use Carbon\CarbonImmutable;
+use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Eloquent\Relations\Relation;
 use Illuminate\Support\Facades\Date;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\ServiceProvider;
@@ -31,6 +34,8 @@ class AppServiceProvider extends ServiceProvider
      */
     protected function configureDefaults(): void
     {
+        Model::preventLazyLoading(! $this->app->isProduction());
+
         Date::use(CarbonImmutable::class);
 
         DB::prohibitDestructiveCommands(
@@ -46,5 +51,14 @@ class AppServiceProvider extends ServiceProvider
                 ->uncompromised()
             : null,
         );
+
+        // Polymorphic relations store these aliases instead of fully-qualified class
+        // names, so a model can be renamed or moved without a data migration. Every
+        // model reachable through a morph relation (attachments, audit subjects,
+        // journal entry sources) must be registered here when it is introduced —
+        // adding an alias after rows exist means rewriting stored type strings.
+        Relation::enforceMorphMap([
+            'user' => User::class,
+        ]);
     }
 }

@@ -11,7 +11,29 @@ permissions:
 
 jobs:
   ci:
+    name: static analysis + suite (sqlite)
     runs-on: ubuntu-latest
+
+    # `composer setup` runs `artisan migrate --force` against .env.example, which
+    # points at PostgreSQL. Without this service the setup step fails before a
+    # single check runs.
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_DB: ledgerly
+          POSTGRES_USER: postgres
+          # .env.example carries an empty DB_PASSWORD to match the local DBngin
+          # setup, and the postgres image refuses to start without either a
+          # password or trust auth.
+          POSTGRES_HOST_AUTH_METHOD: trust
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd="pg_isready -U postgres -d ledgerly"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=5
 
     steps:
       - name: Checkout code
@@ -23,6 +45,9 @@ jobs:
         uses: shivammathur/setup-php@f3e473d116dcccaddc5834248c87452386958240 # v2
         with:
           php-version: '8.5'
+          # pdo_pgsql for the migrate step; bcmath because Money::convertTo() is
+          # the one place the ledger uses it, and neither ships by default.
+          extensions: pdo_pgsql, bcmath
           tools: composer:v2
           coverage: none
 
@@ -30,9 +55,75 @@ jobs:
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: '22'
+          cache: npm
 
       - name: Setup Application
         run: composer setup
 
       - name: Run CI Checks
         run: composer ci:check
+
+  tests-pgsql:
+    name: suite (postgresql)
+    runs-on: ubuntu-latest
+
+    # The suite runs on sqlite :memory: for speed, but sqlite cannot express the
+    # deferred SUM(functional_amount_minor) = 0 constraint, and has no window
+    # functions or SELECT ... FOR UPDATE worth trusting. Anything resting on
+    # those is not "passing" until it passes here. Running the whole suite rather
+    # than a pinned subset means a new test lands on both engines by default.
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_DB: ledgerly
+          POSTGRES_USER: postgres
+          POSTGRES_HOST_AUTH_METHOD: trust
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd="pg_isready -U postgres -d ledgerly"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=5
+
+    env:
+      # phpunit.xml pins DB_CONNECTION to sqlite, but PHPUnit only applies an
+      # <env> entry when the variable is not already set, so these win. The
+      # EXPECTED_DB_DRIVER guard test fails loudly if that ever stops being true
+      # and this job silently degrades into a second sqlite run.
+      DB_CONNECTION: pgsql
+      DB_HOST: 127.0.0.1
+      DB_PORT: 5432
+      DB_DATABASE: ledgerly
+      DB_USERNAME: postgres
+      DB_PASSWORD: ''
+      EXPECTED_DB_DRIVER: pgsql
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Setup PHP
+        uses: shivammathur/setup-php@f3e473d116dcccaddc5834248c87452386958240 # v2
+        with:
+          php-version: '8.5'
+          extensions: pdo_pgsql, bcmath
+          tools: composer:v2
+          coverage: none
+
+      - name: Setup Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '22'
+          cache: npm
+
+      # Builds the Vite manifest as well as migrating: the Inertia root view
+      # calls @vite, so page-rendering tests fail without it.
+      - name: Setup Application
+        run: composer setup
+
+      - name: Run Tests
+        run: php artisan test

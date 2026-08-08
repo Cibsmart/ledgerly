@@ -217,47 +217,95 @@ Use Wayfinder to generate TypeScript functions for Laravel routes. Import from `
 
 # Ledgerly
 
-A double-entry financial management app for internal business use (owner + small team). The full roadmap lives in `docs/plans/ledgerly-development-plan.md` — read it before starting work on a new module.
+A double-entry financial management app that runs the books of **Cibsmart Services Ltd** (single Nigerian entity, NGN functional currency, owner + small team). The full roadmap lives in `docs/plans/ledgerly-development-plan.md` — read it before starting work on a new module, and read its **§ 1** first: the eight real business requirements (R1–R8) are what every scope decision resolves against. In outline: 8 account-currency pairs across 5 institutions (Zenith USD/NGN, Grey USD/NGN, Deel USD, Moniepoint NGN, Kuda NGN), statement import as the primary data-entry path, USD and NGN partner revenue, investments (T-bills, bonds, stocks, real estate), monthly payroll for staff and contractors, expenses with receipts on file, and partner-funded hardware recovered by instalment deduction.
 
 **This is accounting software. The correctness rules below outrank convenience, speed of delivery, and your own judgment about a "simpler" way to do it.** If a requested change would violate one, say so before writing code.
 
 ## Accounting Invariants (Non-Negotiable)
 
-1. **Debits must equal credits.** Enforced in the service layer before anything touches the database. Request validation and UI checks are conveniences, never the guarantee. An unbalanced entry must be impossible to persist.
+1. **Debits must equal credits — in the functional currency.** Enforced in the action layer before anything touches the database, and by a deferred `SUM(functional_amount_minor) = 0` constraint in PostgreSQL. Request validation and UI checks are conveniences, never the guarantee. An unbalanced entry must be impossible to persist. **A mixed-currency entry does not balance in transaction-currency terms and never will** — never assert balance over `amount_minor`.
 2. **Posted entries are immutable.** Never update or delete a posted `journal_entry` or its `journal_lines`. Corrections happen only via a reversing entry that references the original through `reversed_entry_id`. Do not add an "edit posted entry" path, even if asked for one, without first flagging that it breaks the audit trail.
 3. **Financial statements are derived, never stored.** The trial balance, income statement, balance sheet, and cash flow statement are all computed from `journal_lines`. Never introduce a column, cache, or table that holds a statement figure as its own source of truth — if two reports can disagree, the design is wrong. Query-level caching is fine only if it is invalidated by posting.
-4. **Money is never a float.** Monetary columns are `decimal(15, 2)` (PostgreSQL `NUMERIC(15,2)`). Never `float`/`double`. Do all arithmetic on amounts server-side in PHP using string/decimal-safe math or integer cents — never JavaScript number arithmetic. The frontend formats amounts for display; it does not compute them.
+4. **Money is never a float, and never currency-less.** Every monetary column is a `bigInteger` of **integer minor units** suffixed `_minor`, cast to the immutable `App\Support\Money`, which carries its `App\Support\Currency`. Never `float`/`double`, and never `decimal`/`NUMERIC` — integers behave identically on SQLite and PostgreSQL, which is what makes the `:memory:` test suite trustworthy for the invariant that matters most. All arithmetic goes through `Money`; never unwrap to `->minor` to do maths by hand, and never compute amounts in JavaScript. **`Money` throws on cross-currency arithmetic — do not catch it and coerce.** That exception means a conversion is missing, not that a rounding rule is needed. Splits use `Money::allocate()` (largest-remainder, always re-sums). `Money` serializes to `{minor, currency, formatted}`.
 5. **Everything is attributable.** Every entry, posting, approval, and reversal records who did it and when (`created_by`, `posted_at`, and the activity log).
 6. **Closed periods are closed.** Once a `period` has `closed_at`, no entry may be posted into it. Corrections go into a later open period as reversing entries.
 
+## Application Architecture
+
+Business operations live in `app/Actions/<Domain>/<VerbNoun>.php` — one single-purpose class with one public `handle()` method and constructor-promoted dependencies. **Controllers validate, delegate to an action, and render. They do not contain business logic.** Supporting layers:
+
+```
+app/
+├── Actions/   Single-purpose domain operations (PostEntry, ReverseEntry, ClosePeriod, …)
+├── Casts/     Eloquent casts, including MoneyCast
+├── Concerns/  Shared model/validation traits
+├── Enums/     Backed enums for every status, type, role, and permission
+├── Http/      Controllers, form requests, middleware
+├── Models/    Eloquent models
+└── Support/   Value objects and domain services (Money, report builders, …)
+```
+
+Conventions: backed string enums for every status and type, each with a `label()` method; `#[Fillable([...])]` attribute rather than a `$fillable` property; casts declared in a `casts()` method (`phpstan.neon` sets `parseModelCastsMethod` so Larastan reads the body); every polymorphic model registered in `Relation::enforceMorphMap()` in `AppServiceProvider` **before** any rows exist.
+
 ## The Ledger Write Path
 
-All journal entry creation goes through the single ledger service (`JournalEntryService`). Controllers, jobs, commands, seeders, factories, and tests must not build `journal_lines` directly — go through the service so balance validation and attribution cannot be bypassed. If you need a shortcut for a test fixture, add a factory state that calls the service.
+All journal entry creation goes through `App\Actions\Ledger\PostEntry`, and all corrections through `App\Actions\Ledger\ReverseEntry`. Controllers, jobs, commands, seeders, factories, and tests must not build `journal_lines` directly — go through the action so balance validation and attribution cannot be bypassed. If you need a shortcut for a test fixture, add a factory state that calls the action.
+
+Enforcement is layered, deliberately. The action asserts balance before writing; the `JournalLine` and `JournalEntry` models throw `LogicException` from `booted()` on `updating` and `deleting`, so invariant 2 holds even from tinker or a careless seeder. Do not remove either layer because the other exists.
+
+## Foreign Currency
+
+- **The rate used is an input to the posting, never a lookup afterwards.** `PostEntry` snapshots the rate onto each line. Nothing may re-derive a posted line's functional amount from the rate table — correcting a historical rate must change what future postings use and nothing about the past. This is invariant 2 applied to FX.
+- **`exchange_rates` is a default, not the authority.** `PostEntry` accepts an explicit rate per line and falls back to the table only when none is given. A USD→NGN conversion inside Grey executes at a specific negotiated rate, and that rate — not the day's table entry — is what gets snapshotted.
+- **A conversion between two of your own accounts needs an explicit FX gain/loss line.** It is a two-currency entry, so it will not net to zero in functional terms on its own; `ConvertCurrency` computes the residual and posts it to `7100 FX Gain` / `8100 FX Loss`. This is the most frequent FX event in the business — never treat it as an edge case.
+- **`Money::convertTo()` takes an explicit rate string.** It is the only place bcmath appears, and it rounds half away from zero.
+- Lines already in the functional currency store a rate of 1, not null — so every line translates the same way and reports need no special case.
+- FX gain/loss is **realized** on settlement of a foreign-currency balance. **Period-end revaluation of open monetary balances is in scope** (plan Phase 5) — the business carries USD receivables and payables across the fiscal year-end, so `is_monetary` on `accounts` is load-bearing and must be populated correctly on every account.
+
+## The Audit Trail
+
+Storage is `spatie/laravel-activitylog` (approved and installed 2026-08-08), but **nothing calls the `activity()` helper directly.** Every state change goes through `App\Actions\Audit\RecordAudit`, which takes an `App\Enums\AuditEvent`, a subject, and context, and **throws when logging is disabled** — `ActivityLogger::log()` returns null and writes nothing in that case, and an entry that posts without attribution violates invariant 5. Record the audit inside the same transaction as the change it describes.
+
+Two config settings are load-bearing and commented as such in `config/activitylog.php`: `buffer.enabled` must stay false (buffering moves the write outside the posting transaction), and `activitylog:clean` must never be scheduled (this trail sits behind filed accounts). Note that activitylog v5 dropped `LogBatch` — grouping a payroll or depreciation run's postings needs our own key in `properties`.
+
+## Guardrail Tests
+
+`tests/Feature/Architecture/AuditCompletenessTest.php` fails when any class in `app/Actions` neither references `RecordAudit` nor appears in its exemption array. **Adding an exemption is a deliberate, reviewable act — each entry carries a one-line reason.** Do not add one to make a test pass; if an action mutates state, make it audit.
 
 ## Testing Priorities
 
 Per the plan's risk section, double-entry correctness is the whole product. In order of value:
 
-1. `JournalEntryService` — unbalanced entries rejected, posted entries immutable, reversals correct.
-2. Statement generation — every statement test asserts the trial balance still nets to zero.
+1. `PostEntry` / `ReverseEntry` — unbalanced entries rejected, posted entries immutable, reversals correct.
+2. Statement generation — every statement test asserts the trial balance still nets to zero via `expect($lines)->toBalance()`.
 3. Access control — Viewers cannot post, Bookkeepers cannot unlock closed periods.
 
-Tests run against sqlite `:memory:` (see `phpunit.xml`) for speed. Any test whose result depends on PostgreSQL `NUMERIC` semantics, window functions, or full-text search must be verified against PostgreSQL before you report it as passing.
+Tests run against sqlite `:memory:` (see `phpunit.xml`) for speed. Because money is stored as integers, amounts behave identically on both engines — but any test whose result depends on PostgreSQL deferred constraints, window functions, full-text search, or row-locking semantics must be verified against PostgreSQL before you report it as passing. **CI runs the whole suite on both engines**: the `tests-pgsql` job sets `DB_CONNECTION=pgsql` as a real environment variable, which wins because PHPUnit skips an `<env>` entry whose variable is already set. `DatabaseEngineTest` fails if that ever stops holding and the job quietly degrades into a second sqlite run. To reproduce it locally, prefix `php artisan test` with `DB_CONNECTION=pgsql DB_DATABASE=ledgerly_testing EXPECTED_DB_DRIVER=pgsql`.
+
+Feature tests are organised by domain area (`tests/Feature/<Domain>/`). Unit tests extend the application `TestCase` without `RefreshDatabase`, since value objects read config but need no database.
 
 ## Local Environment
 
 - **Database:** PostgreSQL via DBngin — `127.0.0.1:5432`, database `ledgerly`, user `postgres`, empty password. There is no sqlite fallback; do not switch `DB_CONNECTION` back to sqlite.
+- **Currency:** **multi-currency is a requirement, not an option.** The books are kept in one *functional* currency (`config/money.php`, NGN by default); transactions may be in any configured currency. Every journal line stores its transaction amount, the exchange rate used, and a translated functional amount. Changing a currency's `scale`, or the functional currency, on a populated ledger would silently corrupt every stored amount.
+- **Git hooks:** `composer hooks` points `core.hooksPath` at `.githooks`, which formats staged PHP with Pint on commit. `composer setup` runs it. Bypass once with `git commit --no-verify`.
 - **Serving:** Herd serves the app at `http://ledgerly.test`. Never run `artisan serve`. Use the `get-absolute-url` tool before sharing a URL.
 - **Search:** Scout with the `database` driver (`SCOUT_DRIVER=database`). Do not introduce Meilisearch, Typesense, or Algolia without approval.
 - **Monitoring:** Nightwatch is installed but `NIGHTWATCH_TOKEN` is empty locally, so nothing is ingested until a token is set.
 
 ## Dependencies Not Yet Installed
 
-The plan names these, but they are **not** installed. Ask before adding any of them, and do not write code that imports them: `spatie/laravel-permission`, `spatie/laravel-activitylog`, `barryvdh/laravel-dompdf`, `maatwebsite/excel`, `recharts` (npm).
+The plan names these, but they are **not** installed. Ask before adding any of them, and do not write code that imports them: `spatie/laravel-permission`, `mpdf/mpdf`, `openspout/openspout`, `recharts` (npm).
 
 ## Phase Discipline
 
-Phases 0–3 (foundation → chart of accounts → transactions → statements) are the MVP. Do not build Phase 4–6 features — investments, approval workflows, bank reconciliation — unless explicitly asked, even where the data model anticipates them.
+Phases 0–3 (foundation → ledger core → books live → statements) are the MVP; do not build later phases unless explicitly asked, even where the data model anticipates them.
+
+**But "later" no longer means "never."** The plan was re-scoped on 2026-07-28 against the real business requirements, and statement import/reconciliation (Phase 4), receivables/payables and FX revaluation (5), tax (6), fixed assets and depreciation (7), payroll (8) and investments (9) are all now in scope — they are sequenced after the MVP, not excluded from it. Only approval workflows remain out of scope. Reconciliation in particular moved *up* from "optional stretch": with 8 account-currency pairs across 5 institutions, statement import is how transactions get into the ledger.
+
+**Every subsidiary module posts through the ledger.** Payroll, depreciation, investments, invoices and imports call `PostEntry` and tag provenance via `source_type`/`source_id`. A module that can produce a number the general ledger does not know about is a second source of truth, and violates invariant 3.
+
+**Statutory rates are effective-dated data, never PHP constants** — PAYE bands, pension percentages, VAT and WHT rates. Confirm current Nigerian rates from an authoritative source before building the tax or payroll modules; do not take them from a plan document or from memory.
 
 ## Agent Instruction Files
 

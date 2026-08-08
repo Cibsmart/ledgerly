@@ -1,0 +1,41 @@
+#!/usr/bin/env sh
+#
+# Formats staged PHP files with Pint and re-stages them, so the commit
+# records the formatted version rather than leaving fixes in the working
+# tree. Covers every tracked directory Pint is configured for, including
+# tests/ and database/.
+#
+# Enable with: git config core.hooksPath .githooks
+# Bypass once with: git commit --no-verify
+
+set -e
+
+if [ ! -x vendor/bin/pint ]; then
+    echo "pre-commit: vendor/bin/pint not found, skipping (run composer install)."
+    exit 0
+fi
+
+# Only files staged for commit, excluding ones deleted or renamed away.
+# -z plus a null-delimited read keeps paths with spaces intact.
+STAGED_PHP=$(git diff --cached --name-only --diff-filter=ACMR -z -- '*.php' | tr '\0' '\n')
+
+if [ -z "$STAGED_PHP" ]; then
+    exit 0
+fi
+
+# Pint rewrites files in place; anything it touches must go back into the
+# index. Files with unstaged changes are skipped to avoid committing work
+# the author deliberately left out of this commit.
+echo "$STAGED_PHP" | while IFS= read -r file; do
+    [ -n "$file" ] || continue
+
+    if ! git diff --quiet -- "$file"; then
+        echo "pre-commit: $file has unstaged changes, leaving it untouched."
+        continue
+    fi
+
+    vendor/bin/pint "$file" >/dev/null
+    git add -- "$file"
+done
+
+exit 0
