@@ -6,14 +6,13 @@ use App\Actions\Audit\RecordAudit;
 use App\Enums\AuditEvent;
 use App\Enums\JournalEntryStatus;
 use App\Models\Account;
-use App\Models\ExchangeRate;
 use App\Models\JournalEntry;
 use App\Models\JournalLine;
 use App\Models\Period;
 use App\Models\User;
 use App\Support\Currency;
 use App\Support\Ledger\ClosedPeriodException;
-use App\Support\Ledger\ExchangeRateNotFoundException;
+use App\Support\Ledger\ExchangeRateResolver;
 use App\Support\Ledger\InvalidLineException;
 use App\Support\Ledger\PendingLine;
 use App\Support\Ledger\PeriodNotFoundException;
@@ -43,7 +42,10 @@ use Illuminate\Support\Facades\DB;
  */
 final class PostEntry
 {
-    public function __construct(private readonly RecordAudit $audit) {}
+    public function __construct(
+        private readonly RecordAudit $audit,
+        private readonly ExchangeRateResolver $rates,
+    ) {}
 
     /**
      * @param  list<PendingLine>  $lines
@@ -265,13 +267,12 @@ final class PostEntry
     /**
      * The rate to snapshot onto this line.
      *
-     * D8: an explicit rate wins. The `exchange_rates` table is the fallback for
-     * when no rate was quoted, not the authority — a USD→NGN conversion inside
-     * Grey executes at a specific negotiated rate, and that is what belongs on
-     * the line.
-     *
-     * A functional-currency line always stores 1 rather than null, so every
-     * line translates the same way and reports need no special case.
+     * The choice of rate is ExchangeRateResolver's (D8, shared with the actions
+     * that must translate before they post). What is specific to a *line* is the
+     * one rejection below: a rate quoted against a functional-currency line is
+     * not a harmless no-op, it is a caller that believes a conversion is
+     * happening here when none is, and naming the account is what makes that
+     * legible.
      */
     private function resolveRate(
         Account $account,
@@ -280,25 +281,11 @@ final class PostEntry
         ?string $explicit,
         CarbonInterface $date,
     ): string {
-        if ($currency->equals($functional)) {
-            if ($explicit !== null && ! $this->isUnitRate($explicit)) {
-                throw InvalidLineException::redundantRateOnFunctionalLine($account, $explicit);
-            }
-
-            return '1';
+        if ($currency->equals($functional) && $explicit !== null && ! $this->isUnitRate($explicit)) {
+            throw InvalidLineException::redundantRateOnFunctionalLine($account, $explicit);
         }
 
-        if ($explicit !== null) {
-            return $explicit;
-        }
-
-        $rate = ExchangeRate::resolve($currency, $functional, $date);
-
-        if ($rate === null) {
-            throw ExchangeRateNotFoundException::for($currency, $functional, $date);
-        }
-
-        return $rate->rate;
+        return $this->rates->resolve($currency, $functional, $explicit, $date);
     }
 
     private function isUnitRate(string $rate): bool

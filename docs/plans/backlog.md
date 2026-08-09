@@ -7,7 +7,7 @@ Plan documents referenced below:
 - `ledgerly-development-plan.md` — the roadmap: architecture principles, core data model, and phases 0–11.
 - `chart-of-accounts.md` — the default chart the Phase 1 seeder loads, with `is_monetary` and `cash_flow_classification` on every account, plus three open questions that need answering before that seeder is written.
 
-Status verified against the codebase on 2026-08-08. **Phases 0 and 1 are complete; Phase 2 is next — see § 4.** Plan re-scoped against the real business requirements on 2026-07-28 — phase order changed; see below.
+Status verified against the codebase on 2026-08-08. **Phases 0 and 1 are complete; Phase 2 is under way — items 1–2 of 6 shipped, see § 4 and § 4a.** Plan re-scoped against the real business requirements on 2026-07-28 — phase order changed; see below.
 
 ---
 
@@ -110,14 +110,14 @@ Plan: `ledgerly-development-plan.md` § Phase 1; `chart-of-accounts.md` for the 
 - **The local `.env` had drifted back to MySQL again** (`DB_CONNECTION=mysql`, port 3306, user root) despite the 2026-07-28 fix recorded in § 2. Restored to the documented PostgreSQL settings; previous file at `.env.backup-mysql-20260808`. Worth finding out what keeps reverting it — MySQL 8 has neither deferred constraints nor constraint triggers, so the entire D1 payoff silently disappears on it.
 - **`CREATE FUNCTION` had to become `CREATE OR REPLACE FUNCTION`.** A function is not owned by any table, so dropping `journal_lines` takes its trigger but leaves the function behind, and a plain `CREATE` fails on every `migrate:fresh` after the first.
 
-## 4. Phase 2 — Books live — **next to build**
+## 4. Phase 2 — Books live — **in progress**
 
 Plan: `ledgerly-development-plan.md` § Phase 2. **Unblocked.** Start with **opening balances**, posting through `PostEntry` against `3200 Opening Balance Equity` — it is the first thing needed after seeding the chart, and every other Phase 2 screen is entering transactions on top of balances that have to be right first.
 
 Sequence, and why:
 
-1. **Opening balances**, per above. `3200` should return to zero once they are complete; a non-zero balance is the live "you are not finished" signal, which is why it is a real account rather than netted into Retained Earnings.
-2. **Exchange rate management** — pulled forward from nowhere in particular, because it is a Phase 1 gap: nobody can record a USD transaction by hand until rates can be entered. Small screen, `ManageExchangeRates` permission already exists.
+1. ✅ **Opening balances** — done 2026-08-08. See § 4a.
+2. ✅ **Exchange rate management** — done 2026-08-08. See § 4a.
 3. **`financial_accounts` CRUD** and their GL mapping (R2) — the seven cash accounts already exist in the chart and need their real-world counterparts.
 4. **Transfers (D10) and `ConvertCurrency` (D9)** — the two highest-volume entry types in this business. The FX conversion is the sharpest test case in the suite, and the golden fixture already contains a hand-verified example of it to check the action against.
 5. **Manual journal entry form**, plus the simplified "record an expense" / "record income" forms.
@@ -126,6 +126,26 @@ Sequence, and why:
 Also needed somewhere in here, and currently missing entirely: **a way to change a user's role**. Registration defaults to Viewer, so a second team member cannot be given posting rights at all today.
 
 **Deliverable:** every one of R1–R8 is *recordable*, by hand where no module exists yet. The live Jul–Dec 2026 UpSub schedule and the monthly payroll become enterable from this point, well before their dedicated modules exist.
+
+### 4a. Phase 2 items 1–2 shipped, 2026-08-08
+
+293 tests green on **both** sqlite and PostgreSQL, `composer ci:check` clean.
+
+- **`ExchangeRateResolver` extracted from `PostEntry` first**, and this is the load-bearing part. Any action that has to produce a balancing line in the functional currency — opening balances against 3200, and `ConvertCurrency`'s FX residual next — must translate its lines *before* it calls `PostEntry`, then hand `PostEntry` those same rates as explicit overrides. Two implementations of D8 that differ by anything at all would compute a residual `PostEntry` does not see, and the entry would fail the balance assertion for a reason no error message could explain.
+- **Opening balances are not a special kind of data.** One ordinary posted entry per run against `3200`, immutable, corrected only by reversal — there is deliberately no index, edit or destroy route. The equity line is *derived* from the functional total, so a run mixing a USD and an NGN balance works without the caller doing any arithmetic. A run whose balances already offset (a receivable and its payable) produces no equity line at all, because `PendingLine` rightly refuses a zero one.
+- **The screen's real content is the `3200` figure**, summed from posted lines on every render. Non-zero means the opening balances are unfinished. Nothing caches it.
+- **Ledger refusals surface as form errors.** `OpeningBalanceController` catches `LedgerException` and rethrows it as a validation error — closed period, missing rate, header account are all *reachable* from a form, and a 500 is the wrong answer for a rule working correctly. Worth reusing on the transfer, conversion and manual-entry screens.
+- **Exchange rates get create / correct / delete**, matching the three abilities `ExchangeRatePolicy` already had. Correcting and deleting are both safe for the same reason: a posted line snapshotted its rate and never reads the table again, and there is a test asserting a posted entry does not move when its source rate is rewritten. The pair itself is not editable — that is a different rate, not a correction.
+- **`AuditEvent::Deleted` added**, which the enum's own docblock already anticipated.
+
+**Two engine divergences found by the PostgreSQL run**, both of which would have shipped green on sqlite:
+
+1. **`Rule::unique` cannot check `effective_on`.** PostgreSQL stores a `date` column as a date; sqlite has no date affinity, so Eloquent writes the full `Y-m-d H:i:s` and a literal match on `2026-02-01` finds nothing. The uniqueness rule is hand-rolled around `whereDate`, which is how `ExchangeRate::scopeEffectiveOn` already reads that column. **Any future rule comparing a date column needs the same treatment.**
+2. **`periods_closed_attribution`** refuses a close with no `closed_by`. Only PostgreSQL has the CHECK, so a test closing a period without an actor passes on sqlite and fails on the engine that runs production.
+
+**Also worth knowing:** `php artisan wayfinder:generate` without `--with-form` silently strips the form variants `vite.config.ts` configures, breaking every existing `Controller.action.form()` call. Always pass the flag, or let Vite regenerate.
+
+**Known gaps left here:** the two new screens are verified over real HTTP with correct props and pass `tsc`/ESLint, but — as with Chart of Accounts — confirming the React tree mounts needs Playwright and `pest-plugin-browser`, neither of which is installed. And `3200` is resolved by chart code (`RecordOpeningBalances::EQUITY_ACCOUNT_CODE`) rather than by a config key or a flag column, deliberately: the chart already names it, and a second place to look would be a second thing to keep in step.
 
 ## 4b. Phase 3 — Core statements (MVP milestone)
 

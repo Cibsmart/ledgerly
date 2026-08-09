@@ -19,6 +19,8 @@ Read this before Phase 0 — the scaffold is further along than a bare Laravel i
 
 **Already built (Phase 0, 2026-08-08):** PostgreSQL in CI plus a full second suite run against it, `spatie/laravel-activitylog` behind `App\Actions\Audit\RecordAudit`, the grouped sidebar shell, and the default chart of accounts drafted in `chart-of-accounts.md`.
 
+**Already built (Phase 2 so far, 2026-08-08):** opening balances and exchange rate management — see `backlog.md` § 4a, which records two engine divergences the PostgreSQL run caught that would have shipped green on sqlite.
+
 **Already built (Phase 1, 2026-08-08):** the whole ledger core — migrations with the deferred balance trigger, `PostEntry` / `ReverseEntry` / `ClosePeriod` / `ReopenPeriod` / `CreatePeriod`, the Role/Permission enums and four policies, the seeded 70-account chart, the 50-entry golden fixture with hand-verified figures, and the Chart of Accounts screen. 240 tests green on both engines. **Read `backlog.md` § 3 for the known gaps** — notably that there is still no screen for periods, exchange rates, or user roles.
 
 **Already built (Foundation hardening, 2026-07-27):** `App\Support\Money` (currency-aware, throws on cross-currency arithmetic), `App\Support\Currency`, `MoneyCast`, `config/money.php`, `Model::preventLazyLoading` + `Relation::enforceMorphMap` in `AppServiceProvider`, the audit-completeness architecture test, and the `expect()->toBalance()` custom expectation.
@@ -261,9 +263,10 @@ Column lists are the *minimum*.
 - [x] **Golden fixture company** — ~50 entries across two fiscal periods with hand-verified trial balance, income statement and balance sheet committed alongside. Every later phase asserts against it. Highest-leverage artifact in the plan
 - [x] Tests: unbalanced rejected; posted immutable; reversal correct and single-use; closed periods reject; ~~property-based~~ **randomised-input** — 25 balanced entries at random dates net to zero. Genuinely property-based testing needs a generator library, which is not installed and would need approval
 
-### Phase 2 — Books Live (2–2.5 weeks)
+### Phase 2 — Books Live (2–2.5 weeks) — in progress
 
-- [ ] **Opening balances** — first-class path posting through `PostEntry` against Opening Balance Equity. The first thing needed after seeding the chart
+- [x] **Opening balances** — first-class path posting through `PostEntry` against Opening Balance Equity. The first thing needed after seeding the chart. **The equity line is derived from the functional total**, so a run mixing currencies balances without the caller doing arithmetic
+- [x] **Exchange rate management** — not in the original checklist, pulled forward because it was a Phase 1 gap: no USD transaction can be recorded by hand until rates can be entered. Create, correct and delete; `ExchangeRateResolver` extracted from `PostEntry` so anything computing a functional residual before posting resolves rates identically (D8)
 - [ ] `financial_accounts` CRUD and their GL account mapping (R2)
 - [ ] Simplified entry forms ("record an expense", "record income") generating correct double-entry behind the scenes, plus the raw manual journal form
 - [ ] **Transfers (D10)** and **`ConvertCurrency` (D9)** — the two highest-volume entry types in this business, and the FX conversion is the sharpest test case in the suite

@@ -16,6 +16,7 @@ enum AuditEvent: string
 {
     case Created = 'created';
     case Updated = 'updated';
+    case Deleted = 'deleted';
     case Archived = 'archived';
     case Restored = 'restored';
     case Posted = 'posted';
@@ -28,6 +29,7 @@ enum AuditEvent: string
         return match ($this) {
             self::Created => 'Created',
             self::Updated => 'Updated',
+            self::Deleted => 'Deleted',
             self::Archived => 'Archived',
             self::Restored => 'Restored',
             self::Posted => 'Posted',

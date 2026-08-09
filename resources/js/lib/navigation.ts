@@ -2,17 +2,21 @@ import {
     ArrowLeftRight,
     BookOpenText,
     CalendarRange,
+    Coins,
     Landmark,
     LayoutGrid,
     ListTree,
     Receipt,
     Scale,
+    Scale3d,
     TrendingUp,
     Users,
     WalletCards,
 } from 'lucide-react';
 import { dashboard } from '@/routes';
 import { index as accounts } from '@/routes/accounts';
+import { index as exchangeRates } from '@/routes/exchange-rates';
+import { create as openingBalances } from '@/routes/opening-balances';
 import type { NavItem, NavSection } from '@/types';
 
 /**
@@ -31,6 +35,16 @@ export const navSections: NavSection[] = [
         items: [
             { title: 'Dashboard', href: dashboard(), icon: LayoutGrid },
             { title: 'Chart of Accounts', href: accounts(), icon: ListTree },
+            {
+                title: 'Opening Balances',
+                href: openingBalances(),
+                icon: Scale3d,
+            },
+            {
+                title: 'Exchange Rates',
+                href: exchangeRates(),
+                icon: Coins,
+            },
             { title: 'Journal Entries', icon: BookOpenText },
             { title: 'Periods', icon: CalendarRange },
         ],
